@@ -16,6 +16,8 @@ library
     ef >= 3 && < 4,
     pure-core >= 0.7 && < 1,
     pure-default >= 0.7 && < 1,
+    pure-events >= 0.7 && < 1,
+    pure-html >= 0.7 && < 1,
     pure-lifted >= 0.7 && < 1,
     pure-txt >= 0.7 && < 1,
     excelsior >= 0.7 && < 1

@@ -6,7 +6,7 @@ module Pure.Router
   , dispatch, keep, reroute
   , route
   , Router(..)
-  , goto
+  , goto, lref
   , currentRoute
   , onRoute, onRoute'
   ) where
@@ -15,11 +15,17 @@ module Pure.Router
 import Pure.Router.Internal
 
 -- from pure-core
-import Pure.Data.View
+import Pure.Data.View hiding (On)
 import Pure.Data.View.Patterns
 
 -- from pure-default
 import Pure.Data.Default
+
+-- from pure-events
+import Pure.Data.Events
+
+-- from pure-html
+import Pure.Data.HTML.Properties
 
 -- from pure-lifted
 import Pure.Data.Lifted
@@ -87,6 +93,9 @@ onRoute f = watch (\(CurrentRoute r) -> f r)
 
 onRoute' :: Typeable route => (route -> IO ()) -> IO (Maybe (Excelsior.Callback (CurrentRoute route)))
 onRoute' f = watch (\(CurrentRoute r) -> f r)
+
+lref :: HasFeatures a => Txt -> a -> a
+lref t a = Listener (intercept (On "click" (\_ -> goto t))) (Href t a)
 
 goto :: Txt -> IO ()
 goto rt = do
