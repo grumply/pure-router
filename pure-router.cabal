@@ -20,6 +20,7 @@ library
     pure-html >= 0.7 && < 1,
     pure-lifted >= 0.7 && < 1,
     pure-txt >= 0.7 && < 1,
+    pure-uri >= 0.7 && < 1,
     excelsior >= 0.7 && < 1
 
   hs-source-dirs: src
