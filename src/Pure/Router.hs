@@ -9,6 +9,7 @@ module Pure.Router
   , goto, lref
   , currentRoute
   , onRoute, onRoute'
+  , CurrentRoute
   ) where
 
 -- from pure-router (local)
@@ -58,23 +59,22 @@ data CurrentRoute route = CurrentRoute route
 
 instance Typeable route => Pure (Router route) where
   view = ComponentIO $ \self ->
-    def
-      { construct = do
-          d <- getDocument
-          onRaw (toNode d) "load" def $ \stop _ -> do
-            setPopped
-            stop
-          w <- getWindow
-          onRaw (toNode w) "popstate" def $ \_ _ -> do
-            loaded <- getPopped
-            when loaded $ do
-              pn  <- getPathname
-              qps <- getSearch
-              command (RouteChange (pn <> qps) :: RouteCommand route)
-      , unmount = join $ getState self
-      , render = \rtr _ ->
-          View $ Excelsior (CurrentRoute $ initialRoute rtr) [] [ middleware (mw rtr) ]
-      }
+    let
+        runRouter = do
+            pn  <- getPathname
+            qps <- getSearch
+            command (RouteChange (pn <> qps) :: RouteCommand route)
+    in
+        def
+            { construct = do
+                (d,w) <- (,) <$> getDocument <*> getWindow
+                onRaw (toNode d) "load"     def $ \stop _ -> setPopped >> stop
+                onRaw (toNode w) "popstate" def $ \_    _ -> getPopped >>= flip when runRouter
+            , mounted = runRouter
+            , unmount = join $ getState self
+            , render = \rtr _ ->
+                View $ Excelsior (CurrentRoute $ initialRoute rtr) [] [ middleware (mw rtr) ]
+            }
     where
       mw :: Router route -> Middleware (CurrentRoute route) (RouteCommand route)
       mw rtr next (RouteChange path) rt = do
@@ -92,7 +92,7 @@ onRoute :: Typeable route => (route -> IO ()) -> IO (Maybe (Excelsior.Callback (
 onRoute f = watch (\(CurrentRoute r) -> f r)
 
 onRoute' :: Typeable route => (route -> IO ()) -> IO (Maybe (Excelsior.Callback (CurrentRoute route)))
-onRoute' f = watch (\(CurrentRoute r) -> f r)
+onRoute' f = watch' (\(CurrentRoute r) -> f r)
 
 lref :: HasFeatures a => Txt -> a -> a
 lref t a = Listener (intercept (On "click" (\_ -> goto t))) (Href t a)
