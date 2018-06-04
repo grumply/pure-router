@@ -67,9 +67,14 @@ instance Typeable route => Pure (Router route) where
     in
         def
             { construct = do
-                (d,w) <- (,) <$> getDocument <*> getWindow
-                onRaw (toNode d) "load"     def $ \stop _ -> setPopped >> stop
-                onRaw (toNode w) "popstate" def $ \_    _ -> getPopped >>= flip when runRouter
+                -- (d,w) <- (,) <$> getDocument <*> getWindow
+                -- onRaw (toNode d) "load"     def $ \stop _ -> do
+                --   setPopped >> stop
+                w <- getWindow
+                onRaw (toNode w) "popstate" def $ \_    _ -> do
+                  -- print =<< getPopped
+                  -- getPopped >>= flip when runRouter
+                  runRouter
             , mounted = runRouter
             , unmount = join $ getState self
             , render = \rtr _ ->
@@ -83,10 +88,10 @@ instance Typeable route => Pure (Router route) where
           Just rt -> return (CurrentRoute rt)
           _       -> return rt
 
-{-# NOINLINE popped #-}
-popped = unsafePerformIO $ newIORef False
-setPopped = writeIORef popped True
-getPopped = readIORef popped
+-- {-# NOINLINE popped #-}
+-- popped = unsafePerformIO $ newIORef False
+-- setPopped = writeIORef popped True
+-- getPopped = readIORef popped
 
 onRoute :: Typeable route => (route -> IO ()) -> IO (Maybe (Excelsior.Callback (CurrentRoute route)))
 onRoute f = watch (\(CurrentRoute r) -> f r)
@@ -99,13 +104,13 @@ lref t a = Listener (intercept (On "click" (\_ -> goto t))) (Href t a)
 
 goto :: Txt -> IO ()
 goto rt = do
-  setPopped
+  -- setPopped
   pushState rt
   popState
 
 pushPath :: Txt -> IO ()
 pushPath pth = do
-  setPopped
+  -- setPopped
   pushState pth
 #ifndef __GHCJS__
   let (pathname,search) = Txt.span (/= '?') pth
