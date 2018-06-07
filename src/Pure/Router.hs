@@ -64,6 +64,7 @@ instance Typeable route => Pure (Router route) where
             pn  <- getPathname
             qps <- getSearch
             command (RouteChange (pn <> qps) :: RouteCommand route)
+
     in
         def
             { construct = do
@@ -75,8 +76,8 @@ instance Typeable route => Pure (Router route) where
                   -- print =<< getPopped
                   -- getPopped >>= flip when runRouter
                   runRouter
-            , mounted = runRouter
-            , unmount = join $ getState self
+            , executing = runRouter
+            , unmount = join (getState self)
             , render = \rtr _ ->
                 View $ Excelsior (CurrentRoute $ initialRoute rtr) [] [ middleware (mw rtr) ]
             }
@@ -120,7 +121,7 @@ pushPath pth = do
 
 currentRoute :: Typeable route => IO (Maybe route)
 currentRoute = do
-  mr <- current
+  mr <- lookupState
   case mr of
     Just (CurrentRoute rt) -> return (Just rt)
     _                      -> return Nothing
