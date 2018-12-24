@@ -12,13 +12,27 @@ import qualified Pure.Data.Txt as Txt
 import Pure.Data.URI
 
 -- from base
-import Data.Bifunctor
+import Control.Arrow
 import Data.Function
 import Data.List as List
 import Data.Maybe
 import Data.Proxy
 import Data.String
 import Unsafe.Coerce
+
+-- This code is hideous and looks really buggy.
+--
+-- TODO:
+--   * Consider switching to a cleaner approach, maybe something like CPS-based
+--   decoding, since this is really just a scoped decoder with early exit. One 
+--   of the major downsides of this approach is the inability to see any of the
+--   shared abstractions; with the CPS approach, the modularity and 
+--   functionality of the code will likely self-reveal. I can't think of 
+--   anything in `Route` that can't be implemented in a cleaner CPS-based 
+--   decoder. This would also remove the dependence on Ef.
+--
+--   * It would be nice to have a uri QQ for safe uri construction with
+--   automatic (uri)component-wise percent-encoding.
 
 data Route k where
     GetPath
@@ -95,7 +109,7 @@ instance FromTxt a => IsString (Routing a) where
         mp <- getParam p
         case mp of
           Nothing -> keep
-          Just p -> return (fromTxt p)
+          Just p -> return (fromTxt (decodeURIComponent p))
 
 getRawUrl :: Routing Txt
 getRawUrl = send (GetRawUrl id)
@@ -132,8 +146,8 @@ reroute rtr = send (Reroute rtr)
 
 stripTrailingSlashes = Txt.dropWhileEnd (== '/')
 
-breakRoute url =
-  let (path,params0) = Txt.span (/= '?') (stripTrailingSlashes url)
+breakRoute (decodeURI -> uri) =
+  let (path,params0) = Txt.span (/= '?') (stripTrailingSlashes uri)
       params =
         case Txt.uncons params0 of
           Just ('?',qps) ->
@@ -202,13 +216,13 @@ route rtr url0@(breakRoute -> (path,params)) =
       match x y  =
         case (Txt.uncons x,Txt.uncons y) of
           (Just (':',param),Just ('/',path)) -> do
-            let (valueEnc,path') = Txt.break (== '/') path
-                value = decodeURI valueEnc
-            return $ Just $ Right ((param,value),path')
+            let (value,path') = Txt.break (== '/') path
+                value' = decodeURIComponent value
+            return $ Just $ Right ((param,value'),path')
 
           (Just matchPath,Just ('/',path)) -> do
             let (subpathEnc,rest) = Txt.splitAt (Txt.length x) path
-                subpath = decodeURI subpathEnc
+                subpath = decodeURIComponent subpathEnc
             return $
               if subpath == x then
                 if Txt.null rest then
@@ -238,7 +252,7 @@ route rtr url0@(breakRoute -> (path,params)) =
                       let
                         (p, ps') = Txt.break (== '/') ps
                         (c_,cs') = Txt.break (== '/') cs
-                        c  = decodeURI c_
+                        c  = decodeURIComponent c_
                       case Txt.uncons p of
                         Just (':',pat) -> withAcc ((pat,c):acc) ps' cs'
 

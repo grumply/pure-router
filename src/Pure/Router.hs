@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, MultiParamTypeClasses, ScopedTypeVariables, OverloadedStrings #-}
+{-# LANGUAGE CPP, MultiParamTypeClasses, ScopedTypeVariables, OverloadedStrings, ViewPatterns #-}
 module Pure.Router
   ( Route
   , subpath, path
