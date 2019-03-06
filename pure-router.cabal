@@ -13,7 +13,6 @@ cabal-version:       >=1.10
 library
   build-depends:
     base >= 4.8 && < 5,
-    ef >= 3 && < 4,
     pure-core >= 0.7 && < 1,
     pure-default >= 0.7 && < 1,
     pure-events >= 0.7 && < 1,
@@ -21,7 +20,9 @@ library
     pure-lifted >= 0.7 && < 1,
     pure-txt >= 0.7 && < 1,
     pure-uri >= 0.7 && < 1,
-    excelsior >= 0.7 && < 1
+    excelsior >= 0.7 && < 1,
+    mtl,
+    containers
 
   hs-source-dirs: src
 

@@ -1,15 +1,10 @@
 {-# LANGUAGE CPP, MultiParamTypeClasses, ScopedTypeVariables, OverloadedStrings, ViewPatterns #-}
 module Pure.Router
-  ( Route
-  , subpath, path
-  , getRawUrl, setPath, getPath, getParam, getParams, setParam
-  , dispatch, keep, reroute
-  , route
-  , Router(..)
-  , goto, lref
+  ( Router(..)
   , currentRoute
+  , goto, lref
   , onRoute, onRoute'
-  , CurrentRoute
+  , module Pure.Router.Internal
   ) where
 
 -- from pure-router (local)
@@ -114,7 +109,7 @@ pushPath pth = do
   -- setPopped
   pushState pth
 #ifndef __GHCJS__
-  let (pathname,search) = Txt.span (/= '?') pth
+  let (pathname,search) = Txt.span (/= '?') (Txt.takeWhile (/= '#') pth)
   writeIORef pathname_ pathname
   writeIORef search_ search
 #endif

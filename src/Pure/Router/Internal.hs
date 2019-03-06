@@ -1,8 +1,11 @@
-{-# LANGUAGE CPP, GADTs, ScopedTypeVariables, ViewPatterns, TypeSynonymInstances, FlexibleInstances, OverloadedStrings #-}
-module Pure.Router.Internal where
-
--- from ef
-import Ef
+{-# LANGUAGE ViewPatterns, GeneralizedNewtypeDeriving, OverloadedStrings #-}
+module Pure.Router.Internal
+  ( Routing(..), RoutingState(..)
+  , getOriginalUrl, getOriginalPath, getOriginalParams
+  , getPath, getParams
+  , tryParam, param, path, continue, dispatch
+  , route, route'
+  ) where
 
 -- from pure-txt
 import Pure.Data.Txt (Txt,ToTxt(..),FromTxt(..))
@@ -11,256 +14,222 @@ import qualified Pure.Data.Txt as Txt
 -- from pure-uri
 import Pure.Data.URI
 
--- from base
+import Control.Applicative
 import Control.Arrow
-import Data.Function
-import Data.List as List
-import Data.Maybe
-import Data.Proxy
+import Control.Monad
 import Data.String
-import Unsafe.Coerce
 
--- This code is hideous and looks really buggy.
+import Control.Monad.State  as St
+import Control.Monad.Except as E
+import Control.Monad.IO.Class
+
+import qualified Data.Map as Map
+
+
+--------------------------------------------------------------------------------
+-- Routing DSL Type
+-- 
+-- The continuation monad allows short-circuiting with a route result.
+-- The state monad allows delimiting route blocks.
+-- The reader monad allows global access to the root route and params.
 --
--- TODO:
---   * Consider switching to a cleaner approach, maybe something like CPS-based
---   decoding, since this is really just a scoped decoder with early exit. One 
---   of the major downsides of this approach is the inability to see any of the
---   shared abstractions; with the CPS approach, the modularity and 
---   functionality of the code will likely self-reveal. I can't think of 
---   anything in `Route` that can't be implemented in a cleaner CPS-based 
---   decoder. This would also remove the dependence on Ef.
+-- Paths are not guaranteed to be valid URI path segments because percent 
+-- decoding is applied.
+
+data RoutingState rt = RoutingState
+  { _url      :: Txt
+  , _path     :: Txt
+  , _params   :: Map.Map Txt Txt
+  }
+
+newtype Routing rt a = MkRouting 
+  { unRouting :: ExceptT (Maybe rt) (StateT (RoutingState rt) IO) a 
+  } deriving (Functor,Applicative)
+
+instance FromTxt a => IsString (Routing rt a) where
+  fromString = param . toTxt
+
+instance MonadIO (Routing rt) where
+  liftIO = MkRouting . liftIO
+
+instance Monad (Routing rt) where
+  return = MkRouting . return
+  (>>=) ma amb = MkRouting $ unRouting ma >>= unRouting . amb
+  fail _ = MkRouting (throwError Nothing)
+
+instance Alternative (Routing rt) where
+  empty = MkRouting (throwError Nothing)
+  (<|>) rl rr = do
+    st@(RoutingState url path params) <- MkRouting St.get 
+    lr <- liftIO $ evalStateT (runExceptT (unRouting rl)) st
+    case lr of
+      Left (Just rt) -> MkRouting $ throwError (Just rt)
+      Left Nothing   -> rr
+      Right a        -> return a
+
+instance MonadPlus (Routing rt) where
+  mzero = empty
+  -- dubious
+  mplus rl rr = do
+    st@(RoutingState url path params) <- MkRouting St.get 
+    lr <- liftIO $ evalStateT (runExceptT (unRouting rl)) st
+    case lr of
+      Left (Just rt) -> MkRouting $ throwError (Just rt)
+      _ -> rr
+
+
+--------------------------------------------------------------------------------
+-- API
+
+getOriginalUrl :: Routing rt Txt
+getOriginalUrl = do
+  RoutingState url _ _<- MkRouting St.get
+  pure url
+
+getOriginalPath :: Routing rt Txt
+getOriginalPath = do
+  RoutingState url _ _ <- MkRouting St.get
+  let (p,_) = breakRoute url
+  pure p
+
+getOriginalParams :: Routing rt (Map.Map Txt Txt)
+getOriginalParams = do
+  RoutingState url _ _ <- MkRouting St.get
+  let (_,ps) = breakRoute url
+  pure (Map.fromList ps)
+
+getPath :: Routing rt Txt
+getPath = do
+  RoutingState _ path _ <- MkRouting St.get
+  pure path
+
+getParams :: Routing rt (Map.Map Txt Txt)
+getParams = do
+  RoutingState _ _ params <- MkRouting St.get
+  pure params
+
+tryParam :: FromTxt a => Txt -> Routing rt (Maybe a)
+tryParam p = do
+  ps <- getParams
+  pure ( fmap fromTxt $ Map.lookup p ps )
+
+param :: FromTxt a => Txt -> Routing rt a
+param p = do
+  ps <- getParams
+  case Map.lookup p ps of
+    Nothing -> continue
+    Just a  -> pure ( fromTxt a )
+
+path :: Txt -> Routing rt a -> Routing rt (Maybe a)
+path stncl rt = do
+  st@(RoutingState url path params) <- MkRouting St.get 
+  case stencil stncl path of
+    Nothing -> return Nothing
+    Just (sub,ps) -> do
+      let newRS = RoutingState url sub (Map.union (Map.fromList ps) params)
+      lr <- liftIO $ evalStateT (runExceptT (unRouting rt)) newRS
+      case lr of
+        Left (Just rt) -> MkRouting $ throwError (Just rt)
+        Left Nothing   -> return Nothing
+        Right a        -> return (Just a)
+
+continue :: Routing rt a
+continue = MkRouting (throwError Nothing)
+
+dispatch :: rt -> Routing rt a
+dispatch rt = MkRouting $ throwError (Just rt)
+
+
+--------------------------------------------------------------------------------
+-- DSL executor
+
+route' :: rt -> Routing rt a -> Txt -> IO rt
+route' def rt url = do
+  let (path,params) = breakRoute url
+  fmap (either (maybe def id) id) $ (`evalStateT` (RoutingState url path (Map.fromList params))) $ runExceptT $ 
+    unRouting (rt >> return def)
+
+route :: Routing rt a -> Txt -> IO (Maybe rt)
+route rt url = do
+  let (path,params) = breakRoute url
+  fmap (either id id) $ (`evalStateT` (RoutingState url path (Map.fromList params))) $ runExceptT $ 
+    unRouting (rt >> return Nothing)
+
+
+--------------------------------------------------------------------------------
+-- Utils
+
+-- | Normalize path, decode as uri, and extract query parameters.
 --
---   * It would be nice to have a uri QQ for safe uri construction with
---   automatic (uri)component-wise percent-encoding.
-
-data Route k where
-    GetPath
-      :: (Txt -> k)
-      -> Route k
-
-    SetPath
-      :: Txt
-      -> k
-      -> Route k
-
-    GetRawUrl
-      :: (Txt -> k)
-      -> Route k
-
-    GetParams
-      :: ([(Txt,Txt)] -> k)
-      -> Route k
-
-    GetParam
-      :: Txt
-      -> (Maybe Txt -> k)
-      -> Route k
-
-    SetParam
-      :: Txt
-      -> Txt
-      -> k
-      -> Route k
-
-    Reroute
-      :: Routing a
-      -> Route k
-
-    Subpath
-      :: Txt
-      -> Routing a
-      -> k
-      -> Route k
-
-    Path
-      :: Txt
-      -> Routing a
-      -> k
-      -> Route k
-
-    Route
-      :: a
-      -> Route k
-
-    Keep
-      :: Route k
-
-type Routing = Narrative Route IO
-
-instance Functor Route where
-  fmap f (GetPath jk) = GetPath (fmap f jk)
-  fmap f (SetPath j k) = SetPath j (f k)
-  fmap f (GetRawUrl jk) = GetRawUrl (fmap f jk)
-  fmap f (GetParams jjsk) = GetParams (fmap f jjsk)
-  fmap f (GetParam j mjk) = GetParam j (fmap f mjk)
-  fmap f (SetParam j j' k) = SetParam j j' (f k)
-  fmap f (Reroute c) = Reroute c
-  fmap f (Subpath j c k) = Subpath j c (f k)
-  fmap f (Path j c k) = Path j c (f k)
-  fmap f (Route a) = Route a
-  fmap f Keep = Keep
-
-instance FromTxt a => IsString (Routing a) where
-  fromString = getParamOrKeep . fromString
-    where
-      getParamOrKeep :: (FromTxt a) => Txt -> Routing a
-      getParamOrKeep p = do
-        mp <- getParam p
-        case mp of
-          Nothing -> keep
-          Just p -> return (fromTxt (decodeURIComponent p))
-
-getRawUrl :: Routing Txt
-getRawUrl = send (GetRawUrl id)
-
-setPath :: Txt -> Routing ()
-setPath url = send (SetPath url ())
-
-getPath :: Routing Txt
-getPath = send (GetPath id)
-
-getParams :: Routing [(Txt,Txt)]
-getParams = send (GetParams id)
-
-setParam :: Txt -> Txt -> Routing ()
-setParam p v = send (SetParam p v ())
-
-getParam :: Txt -> Routing (Maybe Txt)
-getParam p = send (GetParam p id)
-
-subpath :: Txt -> Routing a -> Routing ()
-subpath match handler = send (Subpath match handler ())
-
-path :: Txt -> Routing a -> Routing ()
-path stencil handler = send (Path stencil handler ())
-
-dispatch :: a -> Routing a
-dispatch a = send (Route a)
-
-keep :: Routing a
-keep = send Keep
-
-reroute :: Routing a -> Routing b
-reroute rtr = send (Reroute rtr)
-
-stripTrailingSlashes = Txt.dropWhileEnd (== '/')
-
-breakRoute (decodeURI -> uri) =
-  let (path,params0) = Txt.span (/= '?') (stripTrailingSlashes uri)
+-- prop> breakRoute "/has%20space"
+-- ("/has space",[])
+--
+-- prop> breakRoute "/a?p=b"
+-- ("/a",[("p","b")])
+--
+-- prop> breakRoute "/a?p1=b&p2=c"
+-- ("/a",[("p1","b"),("p2","c")])
+--
+breakRoute :: Txt -> (Txt,[(Txt,Txt)])
+breakRoute (decodeURI . Txt.takeWhile (/= '#') -> uri) =
+  let (path,params0) = Txt.span (/= '?') uri
       params =
         case Txt.uncons params0 of
           Just ('?',qps) ->
-            List.map (second safeTail) $
-            List.map (Txt.breakOn "=")
+            fmap (second safeTail) $
+            fmap (Txt.breakOn "=")
                      (Txt.splitOn "&" qps)
           _ -> []
       safeTail x =
         case Txt.uncons x of
           Just (_,rest) -> rest
           _ -> ""
-  in (stripTrailingSlashes $ Txt.takeWhile (/= '#') path,params)
+  in (path,params)
 
-route :: Routing a -> Txt -> IO (Maybe a)
-route rtr url0@(breakRoute -> (path,params)) =
-  withUrl path params rtr
+-- | Our core matcher pairs the given stencil against a given path segment.
+--
+-- prop> stencil "/:param" "/test"
+-- Just ("",[("param","test")])
+--
+-- prop> stencil "/:param/a" "/test/a"
+-- Just ("",[("param","test")])
+--
+-- prop> stencil "/a/:param/b" "/a/test/b"
+-- Just ("",[("param","test")])
+--
+-- prop> stencil "/a" "/a/b"
+-- Just ("/b",[])
+--
+-- prop> stencil "/a/:param" "/a/b/c"
+-- Just ("/c",[("param","b")])
+--
+-- prop> stencil "/a" "/b"
+-- Nothing
+--
+stencil :: Txt -> Txt -> Maybe (Txt,[(Txt,Txt)])
+stencil = withAcc []
   where
+    withAcc acc = go
+      where
+        go x y =
+          if Txt.null x && Txt.null y then
+            Just (x,acc)
+          else
+            case (Txt.uncons x,Txt.uncons y) of
+              (Just ('/',ps),Just ('/',cs)) -> do
+                let
+                  (p, ps') = Txt.break (== '/') ps
+                  (c_,cs') = Txt.break (== '/') cs
+                  c  = decodeURIComponent c_
+                case Txt.uncons p of
+                  Just (':',pat) -> withAcc ((pat,c):acc) ps' cs'
 
-      withUrl :: forall b. Txt -> [(Txt,Txt)] -> Routing b -> IO (Maybe b)
-      withUrl url params = go
-          where
+                  _ -> if p == c
+                       then go ps' cs'
+                       else Nothing
 
-              go :: forall x. Routing x -> IO (Maybe x)
-              go (Return _) = return Nothing
-              go (Lift sup) = sup >>= go
-              go (Do msg) =
-                case msg of
-                  GetRawUrl sk -> go (sk url0)
-                  GetPath sk -> go (sk url)
-                  SetPath nr k -> withUrl nr params k
-                  GetParams psk -> go $ psk params
-                  GetParam p mvk -> go $ mvk (List.lookup p params)
-                  SetParam p v k -> withUrl url (nubBy ((==) `on` fst) ((p,v):params)) k
-                  Subpath section more k -> do
-                    espv <- liftIO $ match section url
-                    case espv of
-                      Just (Left subpath) -> do
-                        res <- withUrl subpath params $ unsafeCoerce more
-                        case res of
-                          Nothing -> go k
-                          Just n -> return (Just n)
-                      Just (Right ((p,v),subpath)) -> do
-                        res <- withUrl subpath (nubBy ((==) `on` fst) ((p,v):params)) (unsafeCoerce more)
-                        case res of
-                          Nothing -> go k
-                          Just n -> return (Just n)
-                      Nothing ->
-                        go k
-                  Path pttrn more k -> do
-                    mps <- liftIO $ stencil pttrn url
-                    case mps of
-                      Just ps -> do
-                        res <- withUrl Txt.empty (nubBy ((==) `on` fst) (ps ++ params)) (unsafeCoerce more)
-                        case res of
-                          Nothing -> go k
-                          Just n -> return (Just n)
-                      Nothing -> go k
-                  Reroute rtr' ->
-                    route (unsafeCoerce rtr') url0
-                  Route a ->
-                    return (Just $ unsafeCoerce a)
-                  Keep ->
-                    return Nothing
+              (Nothing,_) -> Just (y,acc)
 
+              _ -> Nothing
 
-      match x y  =
-        case (Txt.uncons x,Txt.uncons y) of
-          (Just (':',param),Just ('/',path)) -> do
-            let (value,path') = Txt.break (== '/') path
-                value' = decodeURIComponent value
-            return $ Just $ Right ((param,value'),path')
-
-          (Just matchPath,Just ('/',path)) -> do
-            let (subpathEnc,rest) = Txt.splitAt (Txt.length x) path
-                subpath = decodeURIComponent subpathEnc
-            return $
-              if subpath == x then
-                if Txt.null rest then
-                  Just $ Left rest
-                else
-                  case Txt.uncons rest of
-                    Just ('/',_) -> Just $ Left rest
-                    _            -> Nothing
-              else
-                Nothing
-
-          _ -> return Nothing
-
-
-      stencil = withAcc []
-        where
-
-          withAcc acc = go
-            where
-
-              go x y =
-                if Txt.null x && Txt.null y then
-                  return $ Just acc
-                else
-                  case (Txt.uncons x,Txt.uncons y) of
-                    (Just ('/',ps),Just ('/',cs)) -> do
-                      let
-                        (p, ps') = Txt.break (== '/') ps
-                        (c_,cs') = Txt.break (== '/') cs
-                        c  = decodeURIComponent c_
-                      case Txt.uncons p of
-                        Just (':',pat) -> withAcc ((pat,c):acc) ps' cs'
-
-                        _ -> if p == c
-                             then go ps' cs'
-                             else return Nothing
-
-                    (Nothing,Nothing) -> return $ Just acc
-
-                    _ -> return Nothing
 
