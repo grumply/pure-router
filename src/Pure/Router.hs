@@ -96,7 +96,7 @@ onRoute' :: Typeable route => (route -> IO ()) -> IO (Maybe (Excelsior.Callback 
 onRoute' f = watch' (\(CurrentRoute r) -> f r)
 
 lref :: HasFeatures a => Txt -> a -> a
-lref t a = Listener (intercept (On "click" (\_ -> goto t))) (Href t a)
+lref t a = OnClickWith intercept (\_ -> goto t) (Href t a)
 
 goto :: Txt -> IO ()
 goto rt = do
