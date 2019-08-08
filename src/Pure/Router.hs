@@ -71,7 +71,7 @@ instance Typeable route => Pure (Router route) where
                   -- print =<< getPopped
                   -- getPopped >>= flip when runRouter
                   runRouter
-            , executing = runRouter
+            , executing = \cb -> runRouter >> pure cb
             , unmounted = join (get self)
             , render = \rtr _ ->
                 View $ Excelsior (CurrentRoute $ initialRoute rtr) [] [ middleware (mw rtr) ]
