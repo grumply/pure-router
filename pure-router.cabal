@@ -1,26 +1,29 @@
 name:                pure-router
-version:             0.7.0.0
-synopsis:
-homepage:            github.com/grumply/pure-router
+version:             0.8.0.0
+homepage:            purehs.org/doc/pure-router
 license:             BSD3
 license-file:        LICENSE
-author:              Sean Mackenzie
-maintainer:          sean@grump.ly
+author:              Sean Hickman
+maintainer:          sean@grumply.com
 category:            Web
 build-type:          Simple
 cabal-version:       >=1.10
 
+source-repository head
+  type: git
+  location: https://github.com/grumply/pure-router.git
+
 library
   build-depends:
-    base >= 4.8 && < 5,
-    pure-core >= 0.7 && < 1,
-    pure-default >= 0.7 && < 1,
-    pure-events >= 0.7 && < 1,
-    pure-html >= 0.7 && < 1,
-    pure-lifted >= 0.7 && < 1,
-    pure-txt >= 0.7 && < 1,
-    pure-uri >= 0.7 && < 1,
-    excelsior >= 0.7 && < 1,
+    base,
+    pure-core,
+    pure-default,
+    pure-events,
+    pure-html,
+    pure-lifted,
+    pure-txt,
+    pure-uri,
+    excelsior,
     mtl,
     containers
 
