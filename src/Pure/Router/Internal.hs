@@ -206,13 +206,17 @@ breakRoute (decodeURI . Txt.takeWhile (/= '#') -> uri) =
 -- prop> stencil "/a" "/b"
 -- Nothing
 --
+-- prop> stencil "/a" "/a/"
+-- Just ("",[])
+--
 stencil :: Txt -> Txt -> Maybe (Txt,[(Txt,Txt)])
 stencil = withAcc []
   where
     withAcc acc = go
       where
         go x y =
-          if Txt.null x && Txt.null y then
+          -- the DSL doesn't have a method of handling trailing slashes, so they are ignored
+          if Txt.null x && (Txt.null y || Txt.null (Txt.dropWhileEnd (== '/') y)) then
             Just (x,acc)
           else
             case (Txt.uncons x,Txt.uncons y) of
