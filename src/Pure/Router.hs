@@ -53,7 +53,7 @@ instance Typeable r => Command (CurrentRoute r) (RouteCommand r)
 data CurrentRoute route = CurrentRoute route
 
 instance Typeable route => Pure (Router route) where
-  view = ComponentIO $ \self ->
+  view = Component $ \self ->
     let
         runRouter = do
             pn  <- getPathname
