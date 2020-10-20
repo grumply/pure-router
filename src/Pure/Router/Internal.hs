@@ -17,6 +17,7 @@ import Pure.Data.URI
 import Control.Applicative
 import Control.Arrow
 import Control.Monad
+import Control.Monad.Fail
 import Data.String
 
 import Control.Monad.State  as St
@@ -51,6 +52,9 @@ instance FromTxt a => IsString (Routing rt a) where
 
 instance MonadIO (Routing rt) where
   liftIO = MkRouting . liftIO
+
+instance MonadFail (Routing rt) where
+  fail _ = empty
 
 instance Monad (Routing rt) where
   return = MkRouting . return
