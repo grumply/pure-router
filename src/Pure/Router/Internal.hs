@@ -3,7 +3,7 @@ module Pure.Router.Internal
   ( Routing(..), RoutingState(..)
   , getOriginalUrl, getOriginalPath, getOriginalParams
   , getPath, getParams
-  , tryParam, param, path, continue, dispatch
+  , tryParam, param, path, continue, dispatch, match
   , route, route'
   ) where
 
@@ -143,6 +143,8 @@ continue = MkRouting (throwError Nothing)
 dispatch :: rt -> Routing rt a
 dispatch rt = MkRouting $ throwError (Just rt)
 
+match :: rt -> Routing rt a
+match = dispatch
 
 --------------------------------------------------------------------------------
 -- DSL executor
