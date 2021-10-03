@@ -3,7 +3,7 @@ module Pure.Router.Internal
   ( Routing(..), RoutingState(..)
   , getOriginalUrl, getOriginalPath, getOriginalParams
   , getPath, getParams
-  , tryParam, param, path, continue, dispatch, match
+  , tryParam, param, path, path', continue, dispatch, match
   , route, route'
   ) where
 
@@ -136,6 +136,22 @@ path stncl rt = do
         Left (Just rt) -> MkRouting $ throwError (Just rt)
         Left Nothing   -> return Nothing
         Right a        -> return (Just a)
+
+-- A Version of path that does not reset the current path on successful return.
+path' :: Txt -> Routing rt a -> Routing rt (Maybe a)
+path' stncl rt = do
+  st@(RoutingState url path params) <- MkRouting St.get 
+  case stencil stncl path of
+    Nothing -> return Nothing
+    Just (sub,ps) -> do
+      let newRS = RoutingState url sub (Map.union (Map.fromList ps) params)
+      (lr,st') <- liftIO $ runStateT (runExceptT (unRouting rt)) newRS
+      case lr of
+        Left (Just rt) -> MkRouting $ throwError (Just rt)
+        Left Nothing   -> return Nothing
+        Right a        -> MkRouting $ do
+          St.put st'
+          return (Just a)
 
 continue :: Routing rt a
 continue = MkRouting (throwError Nothing)
