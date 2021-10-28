@@ -1,6 +1,6 @@
-{-# LANGUAGE ViewPatterns, GeneralizedNewtypeDeriving, OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns, GeneralizedNewtypeDeriving, OverloadedStrings, MultiParamTypeClasses #-}
 module Pure.Router.Internal
-  ( Routing(..), RoutingState(..)
+  ( Routing(..), RoutingState(..), MonadError(..)
   , getOriginalUrl, getOriginalPath, getOriginalParams
   , getPath, getParams
   , tryParam, param, path, path', continue, dispatch, match
@@ -25,7 +25,6 @@ import Control.Monad.Except as E
 import Control.Monad.IO.Class
 
 import qualified Data.Map as Map
-
 
 --------------------------------------------------------------------------------
 -- Routing DSL Type
@@ -47,6 +46,26 @@ newtype Routing rt a = MkRouting
   { unRouting :: ExceptT (Maybe rt) (StateT (RoutingState rt) IO) a 
   } deriving (Functor,Applicative)
 
+evalRouting :: MonadIO m => Routing rt a -> RoutingState rt -> m (Either (Maybe rt) a)
+evalRouting rtng st = liftIO (evalStateT (runExceptT (unRouting rtng)) st)
+
+runRouting :: MonadIO m => Routing rt a -> RoutingState rt -> m (Either (Maybe rt) a,RoutingState rt)
+runRouting rtng st = liftIO (runStateT (runExceptT (unRouting rtng)) st)
+
+instance MonadError (Maybe rt) (Routing rt) where
+  throwError mrt = MkRouting (throwError mrt)
+  catchError rtng f = do
+    st  <- MkRouting St.get
+    (ema,st') <- runRouting rtng st
+    case ema of
+      Left Nothing -> f Nothing
+      Left (Just rt) -> do
+        MkRouting (St.put st')
+        f (Just rt)
+      Right a -> do
+        MkRouting (St.put st')
+        pure a
+
 instance FromTxt a => IsString (Routing rt a) where
   fromString = param . toTxt
 
@@ -62,12 +81,12 @@ instance Monad (Routing rt) where
   fail _ = MkRouting (throwError Nothing)
 
 instance Alternative (Routing rt) where
-  empty = MkRouting (throwError Nothing)
+  empty = throwError Nothing
   (<|>) rl rr = do
     st@(RoutingState url path params) <- MkRouting St.get 
-    lr <- liftIO $ evalStateT (runExceptT (unRouting rl)) st
+    lr <- evalRouting rl st
     case lr of
-      Left (Just rt) -> MkRouting $ throwError (Just rt)
+      Left (Just rt) -> throwError (Just rt)
       Left Nothing   -> rr
       Right a        -> return a
 
@@ -76,9 +95,9 @@ instance MonadPlus (Routing rt) where
   -- dubious
   mplus rl rr = do
     st@(RoutingState url path params) <- MkRouting St.get 
-    lr <- liftIO $ evalStateT (runExceptT (unRouting rl)) st
+    lr <- evalRouting rl st
     case lr of
-      Left (Just rt) -> MkRouting $ throwError (Just rt)
+      Left (Just rt) -> throwError (Just rt)
       _ -> rr
 
 
@@ -131,13 +150,12 @@ path stncl rt = do
     Nothing -> return Nothing
     Just (sub,ps) -> do
       let newRS = RoutingState url sub (Map.union (Map.fromList ps) params)
-      lr <- liftIO $ evalStateT (runExceptT (unRouting rt)) newRS
+      lr <- evalRouting rt newRS
       case lr of
-        Left (Just rt) -> MkRouting $ throwError (Just rt)
+        Left (Just rt) -> dispatch rt
         Left Nothing   -> return Nothing
         Right a        -> return (Just a)
 
--- A Version of path that does not reset the current path on successful return.
 path' :: Txt -> Routing rt a -> Routing rt (Maybe a)
 path' stncl rt = do
   st@(RoutingState url path params) <- MkRouting St.get 
@@ -145,19 +163,19 @@ path' stncl rt = do
     Nothing -> return Nothing
     Just (sub,ps) -> do
       let newRS = RoutingState url sub (Map.union (Map.fromList ps) params)
-      (lr,st') <- liftIO $ runStateT (runExceptT (unRouting rt)) newRS
+      (lr,st') <- runRouting rt newRS
       case lr of
-        Left (Just rt) -> MkRouting $ throwError (Just rt)
+        Left (Just rt) -> throwError (Just rt)
         Left Nothing   -> return Nothing
-        Right a        -> MkRouting $ do
-          St.put st'
+        Right a        -> do
+          MkRouting (St.put st')
           return (Just a)
 
 continue :: Routing rt a
-continue = MkRouting (throwError Nothing)
+continue = throwError Nothing
 
 dispatch :: rt -> Routing rt a
-dispatch rt = MkRouting $ throwError (Just rt)
+dispatch = throwError . Just
 
 match :: rt -> Routing rt a
 match = dispatch
