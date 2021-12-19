@@ -5,6 +5,7 @@ module Pure.Router.Internal
   , getPath, getParams
   , tryParam, param, path, path', continue, dispatch, match
   , route, route'
+  , map
   ) where
 
 -- from pure-txt
@@ -25,6 +26,8 @@ import Control.Monad.Except as E
 import Control.Monad.IO.Class
 
 import qualified Data.Map as Map
+
+import Prelude hiding (map)
 
 --------------------------------------------------------------------------------
 -- Routing DSL Type
@@ -36,20 +39,20 @@ import qualified Data.Map as Map
 -- Paths are not guaranteed to be valid URI path segments because percent 
 -- decoding is applied.
 
-data RoutingState rt = RoutingState
+data RoutingState = RoutingState
   { _url      :: Txt
   , _path     :: Txt
   , _params   :: Map.Map Txt Txt
   }
 
 newtype Routing rt a = MkRouting 
-  { unRouting :: ExceptT (Maybe rt) (StateT (RoutingState rt) IO) a 
+  { unRouting :: ExceptT (Maybe rt) (StateT RoutingState IO) a 
   } deriving (Functor,Applicative)
 
-evalRouting :: MonadIO m => Routing rt a -> RoutingState rt -> m (Either (Maybe rt) a)
+evalRouting :: MonadIO m => Routing rt a -> RoutingState -> m (Either (Maybe rt) a)
 evalRouting rtng st = liftIO (evalStateT (runExceptT (unRouting rtng)) st)
 
-runRouting :: MonadIO m => Routing rt a -> RoutingState rt -> m (Either (Maybe rt) a,RoutingState rt)
+runRouting :: MonadIO m => Routing rt a -> RoutingState -> m (Either (Maybe rt) a,RoutingState)
 runRouting rtng st = liftIO (runStateT (runExceptT (unRouting rtng)) st)
 
 instance MonadError (Maybe rt) (Routing rt) where
@@ -170,6 +173,17 @@ path' stncl rt = do
         Right a        -> do
           MkRouting (St.put st')
           return (Just a)
+
+map :: (rt -> rt') -> Routing rt a -> Routing rt' a
+map f rt = do
+  st <- MkRouting St.get
+  (lr,st') <- runRouting rt st
+  MkRouting (St.put st')
+  case lr of
+    Left (Just rt) -> throwError (Just (f rt))
+    Left Nothing   -> throwError Nothing
+    Right a        -> pure a
+
 
 continue :: Routing rt a
 continue = throwError Nothing
