@@ -2,10 +2,12 @@
 module Pure.Router.Internal
   ( Routing(..), RoutingState(..), MonadError(..)
   , getOriginalUrl, getOriginalPath, getOriginalParams
+  , getRoutingState, putRoutingState
   , getPath, getParams
   , tryParam, param, path, path', continue, dispatch, match
   , route, route'
   , map
+  , runRouting, evalRouting
   ) where
 
 -- from pure-txt
@@ -28,6 +30,7 @@ import Control.Monad.IO.Class
 import qualified Data.Map as Map
 
 import Prelude hiding (map)
+import Debug.Trace
 
 --------------------------------------------------------------------------------
 -- Routing DSL Type
@@ -55,18 +58,28 @@ evalRouting rtng st = liftIO (evalStateT (runExceptT (unRouting rtng)) st)
 runRouting :: MonadIO m => Routing rt a -> RoutingState -> m (Either (Maybe rt) a,RoutingState)
 runRouting rtng st = liftIO (runStateT (runExceptT (unRouting rtng)) st)
 
+getRoutingState :: Routing rt RoutingState 
+getRoutingState = St.get
+
+putRoutingState :: RoutingState -> Routing rt ()
+putRoutingState = St.put
+
+instance MonadState RoutingState (Routing rt) where
+  get = MkRouting St.get
+  put = MkRouting . St.put
+
 instance MonadError (Maybe rt) (Routing rt) where
   throwError mrt = MkRouting (throwError mrt)
   catchError rtng f = do
-    st  <- MkRouting St.get
+    st  <- St.get
     (ema,st') <- runRouting rtng st
     case ema of
       Left Nothing -> f Nothing
       Left (Just rt) -> do
-        MkRouting (St.put st')
+        St.put st'
         f (Just rt)
       Right a -> do
-        MkRouting (St.put st')
+        St.put st'
         pure a
 
 instance FromTxt a => IsString (Routing rt a) where
@@ -86,7 +99,7 @@ instance Monad (Routing rt) where
 instance Alternative (Routing rt) where
   empty = throwError Nothing
   (<|>) rl rr = do
-    st@(RoutingState url path params) <- MkRouting St.get 
+    st@(RoutingState url path params) <- St.get 
     lr <- evalRouting rl st
     case lr of
       Left (Just rt) -> throwError (Just rt)
@@ -97,7 +110,7 @@ instance MonadPlus (Routing rt) where
   mzero = empty
   -- dubious
   mplus rl rr = do
-    st@(RoutingState url path params) <- MkRouting St.get 
+    st@(RoutingState url path params) <- St.get 
     lr <- evalRouting rl st
     case lr of
       Left (Just rt) -> throwError (Just rt)
@@ -109,29 +122,29 @@ instance MonadPlus (Routing rt) where
 
 getOriginalUrl :: Routing rt Txt
 getOriginalUrl = do
-  RoutingState url _ _<- MkRouting St.get
+  RoutingState url _ _<- St.get
   pure url
 
 getOriginalPath :: Routing rt Txt
 getOriginalPath = do
-  RoutingState url _ _ <- MkRouting St.get
+  RoutingState url _ _ <- St.get
   let (p,_) = breakRoute url
   pure p
 
 getOriginalParams :: Routing rt (Map.Map Txt Txt)
 getOriginalParams = do
-  RoutingState url _ _ <- MkRouting St.get
+  RoutingState url _ _ <- St.get
   let (_,ps) = breakRoute url
   pure (Map.fromList ps)
 
 getPath :: Routing rt Txt
 getPath = do
-  RoutingState _ path _ <- MkRouting St.get
+  RoutingState _ path _ <- St.get
   pure path
 
 getParams :: Routing rt (Map.Map Txt Txt)
 getParams = do
-  RoutingState _ _ params <- MkRouting St.get
+  RoutingState _ _ params <- St.get
   pure params
 
 tryParam :: FromTxt a => Txt -> Routing rt (Maybe a)
@@ -148,7 +161,7 @@ param p = do
 
 path :: Txt -> Routing rt a -> Routing rt (Maybe a)
 path stncl rt = do
-  st@(RoutingState url path params) <- MkRouting St.get 
+  st@(RoutingState url path params) <- St.get 
   case stencil stncl path of
     Nothing -> return Nothing
     Just (sub,ps) -> do
@@ -161,7 +174,7 @@ path stncl rt = do
 
 path' :: Txt -> Routing rt a -> Routing rt (Maybe a)
 path' stncl rt = do
-  st@(RoutingState url path params) <- MkRouting St.get 
+  st@(RoutingState url path params) <- St.get 
   case stencil stncl path of
     Nothing -> return Nothing
     Just (sub,ps) -> do
@@ -171,14 +184,14 @@ path' stncl rt = do
         Left (Just rt) -> throwError (Just rt)
         Left Nothing   -> return Nothing
         Right a        -> do
-          MkRouting (St.put st')
+          St.put st'
           return (Just a)
 
 map :: (rt -> rt') -> Routing rt a -> Routing rt' a
 map f rt = do
-  st <- MkRouting St.get
+  st <- St.get
   (lr,st') <- runRouting rt st
-  MkRouting (St.put st')
+  St.put st'
   case lr of
     Left (Just rt) -> throwError (Just (f rt))
     Left Nothing   -> throwError Nothing
@@ -191,8 +204,14 @@ continue = throwError Nothing
 dispatch :: rt -> Routing rt a
 dispatch = throwError . Just
 
-match :: rt -> Routing rt a
-match = dispatch
+match :: Txt -> rt -> Routing rt (Maybe a)
+match pth rt =
+  path pth $ do
+    p <- getPath
+    if Txt.null p then 
+      dispatch rt 
+    else 
+      continue
 
 --------------------------------------------------------------------------------
 -- DSL executor
